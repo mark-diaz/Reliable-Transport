@@ -36,6 +36,9 @@
 #define RTOS 2
 #define DUPS 3
 
+// Max Segment Size
+#define MSS 1012
+
 // Structs
 typedef struct {
     uint16_t seq;
