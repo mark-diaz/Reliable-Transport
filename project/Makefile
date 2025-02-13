@@ -1,14 +1,14 @@
-CC=gcc
-CPPFLAGS=-Wall -Wextra 
-LDFLAGS= 
+CC=g++
+CPPFLAGS=-Wall -Wextra
+LDFLAGS=
 LDLIBS=
 
 DEPS=transport.o io.o
 
-all: server client 
+all: server client
 
 server: server.o $(DEPS)
 client: client.o $(DEPS)
 
 clean:
-	@rm -rf server client *.bin *.o	
+	@rm -rf server client *.bin *.o
