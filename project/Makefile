@@ -3,7 +3,7 @@ CPPFLAGS=-Wall -Wextra
 LDFLAGS=
 LDLIBS=
 
-DEPS=transport.o io.o
+DEPS=transport.o io.o packet.o  # NOTE: Added packet.o to the dependencies
 
 all: server client
 
