@@ -114,6 +114,23 @@ ssize_t recv_packet(uint8_t* recv_buffer, ssize_t bytes_recv) {
     return 0;
 }
 
+void set_parity_bit(packet* pkt) {
+    // Calculate the number of 1s in the packet
+    int count = bit_count(pkt);
+
+    // Determine the parity bit (even parity)
+    uint8_t parity_bit = (count % 2 == 0) ? 0 : 1;
+
+    // Set the parity bit in the packet
+    pkt->flags &= ~0x4;  // Clear the parity bit (assuming it's the 3rd bit in flags)
+    pkt->flags |= (parity_bit << 2);  // Set the parity bit (shift to the 3rd bit position)
+}
+
+bool verify_parity(packet* pkt) {
+    int count = bit_count(pkt);
+    return (count % 2 == 0);  // Should return true if parity is correct
+}
+
 /*
 Example uses of functions: 
 
