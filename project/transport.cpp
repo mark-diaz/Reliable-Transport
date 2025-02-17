@@ -69,7 +69,7 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
         if(bytes_recvd > 0){ // TODO: This should check for SYN ACK details
             int did_send = sendto(sockfd, server_send_handshake_buffer, sizeof(server_send_handshake_buffer), 0, (struct sockaddr*)addr, addr_len);
             if(did_send) {
-                fprintf(stderr, "sent server SYN ACK\n");
+                fprintf(stderr, "sent server SYN ACK Seq:%d, ACK: %d, Flags: %d \n", seq_num, ack, flags);
             }
         }
 
@@ -98,7 +98,7 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
             fprintf(stderr, "sent first client SYN\n");
         }
 
-        // 2. Receive SYN from Server
+        // 2. Receive SYN ACK from Server
         int bytes_recvd = recvfrom(sockfd, client_recv_handshake_buffer, MSS, 0, (struct sockaddr*)addr, &addr_len);
 
         if (bytes_recvd > 0){
@@ -113,6 +113,11 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
             make_handshake_packet(client_send_handshake_buffer, nullptr, 0, seq_num, ack, flags);
 
             // 3. Send final ACK back to server
+
+            // set parity
+            packet* client_send_pkt = (packet*) client_send_handshake_buffer;
+            set_parity_bit(client_send_pkt);
+
             sendto(sockfd, client_send_handshake_buffer, sizeof(client_send_handshake_buffer),
             0, (struct sockaddr*)addr, addr_len);
 
