@@ -37,14 +37,19 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
         // 2. Send back SYN ACK
 
         // Equivalent: char ack[] = "ACK 457, SEQ 789, SYN, ACK";
+        
         uint16_t ack = htons(server_recv_pkt->seq) + 1, seq_num = rand() % 1000, flags = 0x3; // 0x3 = 011 - PARITY=0, SYN=1, ACK=1
 
         make_handshake_packet(server_send_handshake_buffer, nullptr, 0, seq_num, ack, flags);
+        
+        // set parity
+        packet* server_send_pkt = (packet*) server_send_handshake_buffer;
+        set_parity_bit(server_send_pkt);
 
-        if(bytes_recvd > 0){ // TODO: This should check for SYN ACK details
+        if(bytes_recvd > 0) {
             int did_send = sendto(sockfd, server_send_handshake_buffer, sizeof(server_send_handshake_buffer), 0, (struct sockaddr*)addr, addr_len);
             if(did_send) {
-                fprintf(stderr, "sent server SYN ACK\n");
+                fprintf(stderr, "sent server SYN ACK Seq:%d, ACK: %d, Flags: %d \n", seq_num, ack, flags);
             }
         }
 
@@ -65,6 +70,10 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
         // char syn_buff[] = "SYN SEQ= random: 1-1000";
         uint16_t ack = 0, seq_num = rand() % 1000, flags = 0x1; // 0x1 = 001 - PARITY=0, SYN=0, ACK=1
         make_handshake_packet(client_send_handshake_buffer, nullptr, 0, seq_num, ack, flags);
+        
+        // set parity
+        packet* client_send_pkt = (packet*) client_send_handshake_buffer;
+        set_parity_bit(client_send_pkt);
 
         int did_send = sendto(sockfd, client_send_handshake_buffer, sizeof(client_send_handshake_buffer),
             0, (struct sockaddr*)addr, addr_len);
@@ -73,7 +82,7 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
             fprintf(stderr, "sent first client SYN\n");
         }
 
-        // 2. Receive SYN from Server
+        // 2. Receive SYN ACK from Server
         int bytes_recvd = recvfrom(sockfd, client_recv_handshake_buffer, MSS, 0, (struct sockaddr*)addr, &addr_len);
         
         if (bytes_recvd > 0){
@@ -88,6 +97,11 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
             make_handshake_packet(client_send_handshake_buffer, nullptr, 0, seq_num, ack, flags);
 
             // 3. Send final ACK back to server
+
+            // set parity
+            packet* client_send_pkt = (packet*) client_send_handshake_buffer;
+            set_parity_bit(client_send_pkt);
+
             sendto(sockfd, client_send_handshake_buffer, sizeof(client_send_handshake_buffer),
             0, (struct sockaddr*)addr, addr_len);
             
@@ -97,7 +111,6 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
         }
     }    
 
-
     // TODO: Enforce Size as Flow Window ; Default size is MSS
     std::list<packet *> send_buffer;
     std::list<packet *> recv_buffer;
@@ -105,7 +118,6 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
     fprintf(stderr, "Beginning listening loop..\n");
     int seq_num = 0;
 
-    /* Normal State */
     while (true) {
         uint8_t data_buff[MSS]; uint16_t nread;
 
@@ -182,4 +194,9 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
                     0, (struct sockaddr*)addr, addr_len);
         }
     }
+    
 }
+
+
+
+
