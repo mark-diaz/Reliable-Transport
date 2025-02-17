@@ -48,7 +48,7 @@ typedef struct {
     uint16_t win;
     uint16_t flags; // LSb 0 SYN, LSb 1 ACK, LSb 2 Parity
     uint16_t unused;
-    uint8_t payload[0];
+    uint8_t payload[MSS];
 } packet;
 
 // Bit counter
