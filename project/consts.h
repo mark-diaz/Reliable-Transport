@@ -36,8 +36,9 @@
 #define RTOS 2
 #define DUPS 3
 
-// Max Segment Size
+// Max Segment Size and Payload size
 #define MSS 1012
+#define PAYLOAD_SIZE 1012
 
 // Structs
 typedef struct {
