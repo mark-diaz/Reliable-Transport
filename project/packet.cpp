@@ -15,7 +15,7 @@ void make_handshake_packet(uint8_t* buf, uint8_t* data_buffer, ssize_t data_len,
     // Set header fields:
     pkt->seq = htons(seq_num);       // Seq number
     pkt->ack = htons(ack);       // Ack number
-    pkt->length = htons(0);  // No payload needed
+    pkt->length = htons(data_len);  // Size of Payload
     pkt->win = htons(512);     // Window size
     pkt->flags = flags;   // Flags: (hex: 0x3 = 110 - SYN=1, ACK=1, Parity=0 )
     pkt->unused = htons(0);    // Unused field

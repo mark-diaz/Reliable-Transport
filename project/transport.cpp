@@ -31,7 +31,7 @@ void ack_buffer(std::list<packet>& buff, uint16_t ack){
     std::list<packet>::iterator i = buff.begin();
     while(i != buff.end())
     {
-        if(ntohs((*i).seq) <= ack)
+        if(ntohs((*i).seq) < ack)
             i = buff.erase(i);
         else
             i++;
@@ -53,7 +53,7 @@ uint16_t read_buffer(std::list<packet>& buff,
     std::list<packet>::iterator i = buff.begin();
     while(i != buff.end() )
     {
-        // fprintf(stderr, "Expecting packet %d , seeing %d\n", expecting_seq, ntohs((*i).seq));
+        fprintf(stderr, "Expecting packet %d , seeing %d\n", expecting_seq, ntohs((*i).seq));
 
         if(ntohs((*i).seq) == expecting_seq){
             output_p((*i).payload, ntohs((*i).length));
@@ -76,8 +76,8 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
     /* Perform 3-Way Handshake */
     if(type == SERVER) {
         srand(time(0));
-        uint8_t server_recv_handshake_buffer[sizeof(packet) + MSS] = {0};
-        uint8_t server_send_handshake_buffer[sizeof(packet) + MSS] = {0};
+        uint8_t server_recv_handshake_buffer[sizeof(packet)] = {0};
+        uint8_t server_send_handshake_buffer[sizeof(packet)] = {0};
 
         // 1. Receive client SYN
         int bytes_recvd = recvfrom(sockfd, server_recv_handshake_buffer, MSS,
@@ -87,6 +87,13 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
         }
 
         packet* server_recv_pkt = (packet*) server_recv_handshake_buffer;
+        expecting_seq = htons(server_recv_pkt->seq);
+
+        // Output data if there is a payload
+        if(htons(server_recv_pkt->length) > 0){
+            insert_packet(recv_buffer, (*server_recv_pkt));
+            read_buffer(recv_buffer, output_p);
+        }
 
         fprintf(stderr, "Client seq: %d received, flags=%d\n", htons(server_recv_pkt->seq), server_recv_pkt->flags);
 
@@ -96,15 +103,30 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
         uint16_t ack = htons(server_recv_pkt->seq) + 1, flags = 0x3;
         // 0x3 = 011 - PARITY=0, SYN=1, ACK=1
         seq_num = rand() % 1000;
+        //Check if need to send with a payload
+        //Encode packet to send
 
-        make_handshake_packet(server_send_handshake_buffer, nullptr, 0, seq_num, ack, flags);
+        char buf[sizeof(packet)] = {0};
+        packet* pkt = (packet*) buf;
+        pkt->seq = htons(seq_num);
+        pkt->flags = flags;
+        pkt->win = htons(MAX_WINDOW);
+        pkt->ack = htons(ack);
 
-        // set parity
-        packet* server_send_pkt = (packet*) server_send_handshake_buffer;
-        set_parity_bit(server_send_pkt);
+        uint8_t data_buff[MSS];
+        uint16_t nread = input_p(data_buff, MSS);
+        pkt->length = htons(nread);
+        memcpy(pkt->payload, data_buff, nread);
+        set_parity_bit(pkt);
+
+        // make_handshake_packet(server_send_handshake_buffer, nullptr, 0, seq_num, ack, flags);
+
+        // // set parity
+        // packet* server_send_pkt = (packet*) server_send_handshake_buffer;
+        // set_parity_bit(server_send_pkt);
 
         if(bytes_recvd > 0){ // TODO: This should check for SYN ACK details
-            int did_send = sendto(sockfd, server_send_handshake_buffer, sizeof(server_send_handshake_buffer), 0, (struct sockaddr*)addr, addr_len);
+            int did_send = sendto(sockfd, pkt, sizeof(packet), 0, (struct sockaddr*)addr, addr_len);
             if(did_send) {
                 fprintf(stderr, "sent server SYN ACK Seq:%d, ACK: %d, Flags: %d \n", seq_num, ack, flags);
                 expecting_seq = ack;
@@ -112,64 +134,85 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
             }
         }
 
-        // 3. Receive last ACK
-        bytes_recvd = recvfrom(sockfd, server_recv_handshake_buffer, MSS,
-            0, (struct sockaddr*)addr, &addr_len);
+        // // 3. Receive last ACK
+        // bytes_recvd = recvfrom(sockfd, server_recv_handshake_buffer, MSS,
+        //     0, (struct sockaddr*)addr, &addr_len);
 
-        if(bytes_recvd > 0){
-            if(htons(server_recv_pkt->seq) != 0){
-                expecting_seq = htons(server_recv_pkt->seq) + 1;
-            }
+        // if(bytes_recvd > 0){
+        //     if(htons(server_recv_pkt->length) != 0){
 
-            fprintf(stderr, "Client seq: %d received, flags=%d\n", htons(server_recv_pkt->seq), server_recv_pkt->flags);
-        }
+        //         expecting_seq = htons(server_recv_pkt->seq) ;
+        //     }
+
+        //     fprintf(stderr, "Client seq: %d received, flags=%d\n", htons(server_recv_pkt->seq), server_recv_pkt->flags);
+        // }
     }
 
 
     if(type == CLIENT){
         srand(time(0)+1);
 
-        // 1. Send first SYN
-
-        uint8_t client_send_handshake_buffer[sizeof(packet) + MSS] = {0};
-        uint8_t client_recv_handshake_buffer[sizeof(packet) + MSS] = {0};
+        // 1. Send first SYN with random SEQ
+        uint8_t client_send_handshake_buffer[sizeof(packet)] = {0};
+        uint8_t client_recv_handshake_buffer[sizeof(packet)] = {0};
 
         // char syn_buff[] = "SYN SEQ= random: 1-1000";
         uint16_t ack = 0, flags = 0x1;
         seq_num = rand() % 1000 ; // 0x1 = 001 - PARITY=0, SYN=0, ACK=1
-        make_handshake_packet(client_send_handshake_buffer, nullptr, 0, seq_num, ack, flags);
 
-        int did_send = sendto(sockfd, client_send_handshake_buffer, sizeof(client_send_handshake_buffer),
+        //Check if need to send with a payload
+        //Encode packet to send
+        char buf[sizeof(packet)] = {0};
+        packet* pkt = (packet*) buf;
+        pkt->seq = htons(seq_num);
+        pkt->flags = flags;
+        pkt->win = htons(MAX_WINDOW);
+        pkt->ack = htons(ack);
+
+        uint8_t data_buff[MSS];
+        uint16_t nread = input_p(data_buff, MSS);
+        pkt->length = htons(nread);
+        memcpy(pkt->payload, data_buff, nread);
+        set_parity_bit(pkt);
+
+        // make_handshake_packet(client_send_handshake_buffer, nullptr, 0, seq_num, ack, flags);
+
+        int did_send = sendto(sockfd, pkt, sizeof(packet) - (MSS-nread),
             0, (struct sockaddr*)addr, addr_len);
 
         if(did_send){
             fprintf(stderr, "sent first client SYN\n");
+            seq_num++;
         }
 
         // 2. Receive SYN ACK from Server
         int bytes_recvd = recvfrom(sockfd, client_recv_handshake_buffer, MSS, 0, (struct sockaddr*)addr, &addr_len);
 
         if (bytes_recvd > 0){
-
             packet* client_recv_pkt = (packet*) client_recv_handshake_buffer;
-
             fprintf(stderr, "Server seq: %d received, flags=%d\n", htons(client_recv_pkt->seq), client_recv_pkt->flags);
 
             // char syn_ack_buff[] = "ACK 790, SEQ 457, ACK";
-            ack = htons(client_recv_pkt->seq) + 1, seq_num = htons(client_recv_pkt->ack), flags = 0x1; // 0x1 = 001 - PARITY=0, SYN=0, ACK=1
-            expecting_seq = ack;
+            ack = htons(client_recv_pkt->seq) + 1, flags = 0x1; // 0x1 = 001 - PARITY=0, SYN=0, ACK=1
+            expecting_seq = htons(client_recv_pkt->seq);
+
+            //Check if there is payload
+            if(htons(client_recv_pkt->length) > 0){
+                insert_packet(recv_buffer, (*client_recv_pkt));
+                read_buffer(recv_buffer, output_p);
+            }
 
 
             // 3. Send final ACK back to server
             // Check if need to send with data
-            uint8_t data_buff[MSS]; uint16_t input_read;
+            uint16_t input_read = input_p(data_buff, MSS);
+
             uint16_t next_seq_num = (input_read) ? seq_num : 0;
 
             make_handshake_packet(client_send_handshake_buffer, data_buff, input_read, next_seq_num, ack, flags);
 
             // Data was sent, update sequence number and add to sending buffer
             if(next_seq_num){
-                fprintf(stderr, "I piggyback data!");
                 seq_num++;
             }
 
@@ -185,6 +228,8 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
             }
         }
     }
+
+
     fprintf(stderr, "My next seq: %d -- I expect: %d\n", seq_num, expecting_seq);
     //Set socket nonblocking
     int socket_flags = fcntl(sockfd, F_GETFL);
@@ -207,13 +252,13 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
             uint16_t seq = ntohs(pkt->seq);
             uint16_t length = ntohs(pkt->length);
             bool ack_flag = (pkt->flags);
+            fprintf(stderr, "Received packet %d\n", seq);
 
             // Integrity Check
             if(!verify_parity(pkt)){
                 fprintf(stderr, "Dropping Corrupt packet %d\n", seq);
                 continue;
             }
-
 
             //If ACK flag is set, remove ACKed packets from sending buffer
             if(ack_flag){
@@ -244,7 +289,6 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
                 ack_pkt->length = htons(nread);
                 memcpy(pkt->payload, data_buff, nread);
                 ack_pkt->seq = htons(next_seq);
-                insert_packet(send_buffer, (*ack_pkt));
             }
             set_parity_bit(ack_pkt);
 
@@ -252,6 +296,8 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
             // Send back ACK
             sendto(sockfd, ack_pkt, sizeof(packet) - (MSS-ntohs(ack_pkt->length)),
                     0, (struct sockaddr*)addr, addr_len);
+            fprintf(stderr, "Sent ACK  %d\n", next_seq);
+
         }
 
 
@@ -278,6 +324,7 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
                 if(did_send>0){
                     // Add packet to sending buffer
                     insert_packet(send_buffer, *pkt);
+                    fprintf(stderr, "I sent %d\n", seq_num);
                     seq_num++;
                 }
             }
@@ -290,6 +337,7 @@ uint16_t get_buffer_size(std::list<packet> buff){
     uint16_t buff_size = 0;
 
     for (auto const& i : buff) {
+        fprintf(stderr,"Packet %d \n",ntohs(i.seq));
         buff_size += ntohs(i.length);
     }
 
