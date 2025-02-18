@@ -5,7 +5,7 @@
 #include <string.h>
 #include "consts.h"
 #include <list>
-#include <bitset>
+
 
 void make_handshake_packet(uint8_t* buf, uint8_t* data_buffer, ssize_t data_len, uint16_t seq_num, uint16_t ack, uint16_t flags) {
 
@@ -125,8 +125,7 @@ void set_parity_bit(packet* pkt) {
     // Set the parity bit in the packet
     pkt->flags &= ~0x4;  // Clear the parity bit (assuming it's the 3rd bit in flags)
     pkt->flags |= (parity_bit << 2);  // Set the parity bit (shift to the 3rd bit position)
-
-    fprintf(stderr, "New flag of %d is %s\n", ntohs(pkt->seq), std::bitset<3>(pkt->flags).to_string().c_str());}
+}
 
 bool verify_parity(packet* pkt) {
     int count = bit_count(pkt);
