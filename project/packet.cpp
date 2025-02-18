@@ -5,20 +5,21 @@
 #include <string.h>
 #include "consts.h"
 #include <list>
+#include <bitset>
 
 void make_handshake_packet(uint8_t* buf, uint8_t* data_buffer, ssize_t data_len, uint16_t seq_num, uint16_t ack, uint16_t flags) {
-    
+
     printf("Creating Ack Packet!\n");
     packet* pkt = (packet*) buf;
 
-    // Set header fields: 
+    // Set header fields:
     pkt->seq = htons(seq_num);       // Seq number
     pkt->ack = htons(ack);       // Ack number
     pkt->length = htons(0);  // No payload needed
     pkt->win = htons(512);     // Window size
     pkt->flags = flags;   // Flags: (hex: 0x3 = 110 - SYN=1, ACK=1, Parity=0 )
     pkt->unused = htons(0);    // Unused field
-   
+
     // Copy the data buffer into the payload (if data_len > 0)
     if (data_len > 0 && data_buffer != nullptr) {
         memcpy(pkt->payload, data_buffer, data_len);
@@ -33,7 +34,7 @@ void make_packet(uint8_t* buf, uint16_t seq_num) {
     printf("Making Packet!\n");
     packet* pkt = (packet*) buf;
 
-    // Set header fields: 
+    // Set header fields:
     pkt->seq = htons(seq_num);       // Seq number
     pkt->ack = htons(2);       // Ack number
     pkt->length = htons(PAYLOAD_SIZE);  // Length of payload
@@ -42,7 +43,7 @@ void make_packet(uint8_t* buf, uint16_t seq_num) {
     pkt->unused = htons(0);    // Unused field
 
     uint8_t packet_data[PAYLOAD_SIZE];
-    
+
     for (int i = 0; i < 26; i++) {
         packet_data[i] = 'A' + (i % 26);  // Fill with 'A', 'B', 'C', etc.
     }
@@ -53,9 +54,9 @@ void make_packet(uint8_t* buf, uint16_t seq_num) {
 
 
 ssize_t send_packets(uint8_t* write_buffer, ssize_t bytes_read, uint16_t* seq_num) {
-   
+
     if (bytes_read <= 0) {
-        return 0; 
+        return 0;
     }
 
     printf("Bytes read: %zd\n", bytes_read);
@@ -65,13 +66,13 @@ ssize_t send_packets(uint8_t* write_buffer, ssize_t bytes_read, uint16_t* seq_nu
 
     // For each packet
     for (int i = 0; i < num_packets; i++) {
-        
+
         printf("Packet created!\n");
 
          // Allocate memory for packet
         uint8_t buf[sizeof(packet) + MSS] = {0};
         // Cast to packet structure
-        packet* pkt = (packet*) buf;          
+        packet* pkt = (packet*) buf;
         pkt->seq = ntohs(*seq_num);
 
         // Determine payload boundaries
@@ -84,9 +85,9 @@ ssize_t send_packets(uint8_t* write_buffer, ssize_t bytes_read, uint16_t* seq_nu
 
         // Write to packet
         memcpy(pkt->payload, write_buffer + payload_start, payload_len); // Copy payload
-        
+
         // Increment sequence number
-        (*seq_num)++; 
+        (*seq_num)++;
 
         printf("Sequence number: %hu\n", ntohs(pkt->seq));
         printf("Payload: %d %s\n", (int)payload_len, pkt->payload);
@@ -95,12 +96,12 @@ ssize_t send_packets(uint8_t* write_buffer, ssize_t bytes_read, uint16_t* seq_nu
 
     }
 
-    return num_packets; 
+    return num_packets;
 }
 
 ssize_t recv_packet(uint8_t* recv_buffer, ssize_t bytes_recv) {
     if (bytes_recv <= 0) {
-        return 0; 
+        return 0;
     }
 
     // Process each packet
@@ -109,8 +110,8 @@ ssize_t recv_packet(uint8_t* recv_buffer, ssize_t bytes_recv) {
 
     printf("Payload received: %d %s Seq: #%d\n", (int)bytes_recv, pkt->payload, htons(pkt->seq));
 
-    // handle integrity 
-    
+    // handle integrity
+
     return 0;
 }
 
@@ -124,7 +125,8 @@ void set_parity_bit(packet* pkt) {
     // Set the parity bit in the packet
     pkt->flags &= ~0x4;  // Clear the parity bit (assuming it's the 3rd bit in flags)
     pkt->flags |= (parity_bit << 2);  // Set the parity bit (shift to the 3rd bit position)
-}
+
+    fprintf(stderr, "New flag of %d is %s\n", ntohs(pkt->seq), std::bitset<3>(pkt->flags).to_string().c_str());}
 
 bool verify_parity(packet* pkt) {
     int count = bit_count(pkt);
@@ -132,12 +134,12 @@ bool verify_parity(packet* pkt) {
 }
 
 /*
-Example uses of functions: 
+Example uses of functions:
 
     uint8_t write_buffer[BUFFER_SIZE];
     ssize_t bytes_read;
 
-    uint16_t seq_num = 0; 
+    uint16_t seq_num = 0;
 
     // Create fake packet:
     uint8_t buf[sizeof(packet) + PAYLOAD_SIZE];
@@ -146,11 +148,11 @@ Example uses of functions:
 
     recv_packet(buf, sizeof(packet) + PAYLOAD_SIZE);
 
-    
+
     // chop into packets
     while (true) {
-        
-    //  function to read 
+
+    //  function to read
         bytes_read = input_p(write_buffer, sizeof(write_buffer));
         send_packets(write_buffer, bytes_read, &seq_num);
 

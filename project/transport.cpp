@@ -20,7 +20,8 @@ uint16_t recv_win = MAX_WINDOW;
 // Updates when receiving new packets
 uint16_t their_recv_win =  MAX_WINDOW;
 
-int seq_num = 0;
+uint16_t seq_num = 0;
+uint16_t expecting_seq = 0;
 
 
 void ack_buffer(std::list<packet>& buff, uint16_t ack){
@@ -33,7 +34,6 @@ void ack_buffer(std::list<packet>& buff, uint16_t ack){
             i++;
     }
 }
-
 
 
 // Main function of transport layer; never quits
@@ -62,9 +62,14 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
         // 2. Send back SYN ACK
 
         // Equivalent: char ack[] = "ACK 457, SEQ 789, SYN, ACK";
-        uint16_t ack = htons(server_recv_pkt->seq) + 1, seq_num = rand() % 1000, flags = 0x3; // 0x3 = 011 - PARITY=0, SYN=1, ACK=1
+        uint16_t ack = htons(server_recv_pkt->seq) + 1, flags = 0x3;
+        seq_num = rand() % 1000; // 0x3 = 011 - PARITY=0, SYN=1, ACK=1
 
         make_handshake_packet(server_send_handshake_buffer, nullptr, 0, seq_num, ack, flags);
+
+        // set parity
+        packet* server_send_pkt = (packet*) server_send_handshake_buffer;
+        set_parity_bit(server_send_pkt);
 
         if(bytes_recvd > 0){ // TODO: This should check for SYN ACK details
             int did_send = sendto(sockfd, server_send_handshake_buffer, sizeof(server_send_handshake_buffer), 0, (struct sockaddr*)addr, addr_len);
@@ -132,61 +137,76 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
     socket_flags |= O_NONBLOCK;
     fcntl(sockfd, F_SETFL, socket_flags);
 
-    // TODO: Enforce Size as Flow Window ; Default size is MSS
     std::list<packet> send_buffer;
     std::list<packet> recv_buffer;
 
-    fprintf(stderr, "Beginning listening loop..\n");
     /* Normal State */
     while (true) {
         uint8_t data_buff[MSS]; uint16_t nread;
         char buf[sizeof(packet) + MSS] = {0};
-
-        //Decocde packet
         packet* pkt = (packet*) buf;
 
         // Receiving data
         int bytes_recvd = recvfrom(sockfd, pkt, sizeof(packet),
             0, (struct sockaddr*)addr, &addr_len);
-        if(bytes_recvd > 0){
 
+        if(bytes_recvd > 0){
             uint16_t ack = ntohs(pkt->ack);
             uint16_t seq = ntohs(pkt->seq);
+            uint16_t length = ntohs(pkt->length);
             bool ack_flag = (pkt->flags);
-            // fprintf(stderr, "Ack packet %d!", pkt->flags);
 
-            //If ACK is set, remove previously ACKed packets from sending buffer
-            if(ack_flag){
-                fprintf(stderr, "Ack packet %d!\n", ack);
-                ack_buffer(send_buffer, ack);
+            // Integrity Check
+            if(!verify_parity(pkt)){
+                fprintf(stderr, "Dropping Corrupt packet %d\n", seq);
+                continue;
             }
 
-            // Place the packet in a receiving buffer
+
+            //If ACK flag is set, remove ACKed packets from sending buffer
+            if(ack_flag){
+                ack_buffer(send_buffer, ack);
+
+                // If dedicated ACK pkt, then continue
+                if(length <= 0) continue;
+            }
+
+            // Place the packet in receiving buffer
             recv_buffer.push_back((*pkt));
-            // fprintf(stderr, "Reading packet %d: %s\n", ntohs(pkt->seq), pkt->payload);
-            get_buffer_size(recv_buffer);
+
+            fprintf(stderr, "Rec size %d, send size %d\n", get_buffer_size(recv_buffer), get_buffer_size(send_buffer));
 
             // TODO: Do a linear scan of all the packets in the receiving buffer starting with the next SEQ you expect and write their contents to standard output
 
             packet output_pkt = recv_buffer.front();
+            uint16_t next_seq = ntohs(((recv_buffer.back()).seq)) + 1;
+
 
             recv_buffer.pop_front();
-            uint16_t expected_seq = ntohs(output_pkt.seq);
             output_p(output_pkt.payload, ntohs(output_pkt.length));
 
-            // Send back ACK
-            // TODO: Decide whether to send dedicated ACK or not
+            uint16_t nread = input_p(data_buff, MSS);
             packet* ack_pkt = (packet*) buf;
             ack_pkt->flags = 1;
-            ack_pkt->ack = htons(expected_seq++);
+            ack_pkt->ack = htons(next_seq);
+            ack_pkt->length = htons(0);
+            ack_pkt->seq = htons(0);
 
-            // int sent = sendto(sockfd, ack_pkt, sizeof(packet) - MSS,
-            //         0, (struct sockaddr*)addr, addr_len);
-            // if(sent>0){
-            //     fprintf(stderr, " Sent Ack %d \n", expected_seq );
-            // }
+            // If there is data to send with ACK, add to buffer
+            if(nread){
+                ack_pkt->length = htons(nread);
+                memcpy(pkt->payload, data_buff, nread);
+                ack_pkt->seq = htons(next_seq);
+                send_buffer.push_back((*ack_pkt));
+            }
+            set_parity_bit(ack_pkt);
 
+
+            // Send back ACK
+            sendto(sockfd, ack_pkt, sizeof(packet) - (MSS-ntohs(ack_pkt->length)),
+                    0, (struct sockaddr*)addr, addr_len);
         }
+
 
         // Sending Data
         // Send until window is full
@@ -199,6 +219,9 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
                 pkt->ack = htons(0);
                 memcpy(pkt->payload, data_buff, nread);
                 pkt->length = htons(nread);
+                pkt->flags = 0;
+                pkt->win = MAX_WINDOW;
+                set_parity_bit(pkt);
 
                 int did_send = sendto(sockfd, pkt, sizeof(packet) - (MSS-nread),
                 0, (struct sockaddr*)addr, addr_len);
