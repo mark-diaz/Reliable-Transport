@@ -33,11 +33,18 @@ std::list<packet> recv_buffer;
 
 // Remove acknowledged packets from buffer
 void ack_buffer(std::list<packet>& buff, uint16_t ack){
-    std::list<packet>::iterator i = buff.begin();
-    while(i != buff.end())
+    std::list<packet>::iterator i = send_buffer.begin();
+    while(i != send_buffer.end())
     {
-        if(ntohs((*i).seq) < ack)
+        // fprintf(stderr,"SEND BUF %d ", ntohs(i->seq));
+        fprintf(stderr,"ENTERING ACK_BUFFER %d\n", ntohs((*i).seq));
+
+        if(ntohs((*i).seq) < ack) {
+            fprintf(stderr,"REMOVING SEQ FROM SENDING BUF %d\n", ntohs(i->seq));
+
             i = buff.erase(i);
+        }
+
         else
             i++;
     }
@@ -51,7 +58,7 @@ void insert_packet(std::list<packet>& buff, const packet& new_packet) {
     }
 
     buff.insert(it, new_packet);
-    fprintf(stderr, "Added %d to buffer\n", ntohs(new_packet.seq));
+    fprintf(stderr, "RECV BUFFER ADD %d\n", ntohs(new_packet.seq));
 }
 
 // Creates and Sends packet, adds to buffer and returns success
@@ -83,7 +90,9 @@ bool send_packet(uint16_t ack, uint16_t flags,
 
     if(did_send>0){
         // Add packet to sending buffer
-        insert_packet(send_buffer, *pkt);
+        if (data_len != 0) {
+            insert_packet(send_buffer, *pkt);
+        }
         fprintf(stderr, "Packet sent: %d\n", seq_num-1);
         return true;
     }
@@ -107,8 +116,10 @@ uint16_t read_buffer(std::list<packet>& buff,
 
         if(ntohs((*i).seq) == expecting_seq){
             output_p((*i).payload, ntohs((*i).length));
+            fprintf(stderr, "RECV BUFF ERASE - SEQ# %d\n",ntohs((*i).seq));
             i = buff.erase(i);
             expecting_seq++;
+
         }
         // Packet did not match expected sequence
         else break;
@@ -180,7 +191,7 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
         if(bytes_recvd > 0){ // TODO: This should check for SYN ACK details
             int did_send = sendto(sockfd, pkt, sizeof(packet), 0, (struct sockaddr*)addr, addr_len);
             if(did_send) {
-                fprintf(stderr, "sent server SYN ACK Seq:%d, ACK: %d, Flags: %d \n", seq_num, ack, flags);
+                fprintf(stderr, "sent server SYN ACK Seq:%d, ACK: %d\n", seq_num, ack);
                 expecting_seq = ack;
                 seq_num ++;
             }
@@ -233,7 +244,7 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
             0, (struct sockaddr*)addr, addr_len);
 
         if(did_send){
-            fprintf(stderr, "sent first client SYN\n");
+            fprintf(stderr, "sent first client SYN -- seq: %d: \n", ntohs(client_send_pkt->seq));
             seq_num++;
         }
 
@@ -274,10 +285,8 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
             sendto(sockfd, client_send_pkt, sizeof(packet) - (MSS-nread),
             0, (struct sockaddr*)addr, addr_len);
 
-            fprintf(stderr, "Ack flags: %d -- Ack#: %d\n", client_send_pkt->flags, ntohs(client_send_pkt->ack));
-
             if(did_send) {
-                fprintf(stderr, "sent last client SYN\n");
+                fprintf(stderr, "sent last client SYN - seq= %d\n", ntohs(client_send_pkt->seq));
             }
         }
     }
@@ -345,7 +354,7 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
 
                 bool did_send = send_packet(0,0, data_buff, nread);
                 if(did_send){
-                    fprintf(stderr, "supposedly sent %d\n", seq_num-1);
+                    fprintf(stderr, "Sent Packet: %d\n", seq_num-1);
                 }
             }
         }
@@ -357,7 +366,7 @@ uint16_t get_buffer_size(std::list<packet> buff){
     uint16_t buff_size = 0;
 
     for (auto const& i : buff) {
-        fprintf(stderr,"SEND BUF %d ",ntohs(i.seq));
+        fprintf(stderr,"SEND BUF %d",ntohs(i.seq));
         buff_size += ntohs(i.length);
     }
     fprintf(stderr,"\n");
