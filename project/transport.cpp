@@ -32,17 +32,20 @@ struct sockaddr_in* global_addr;
 int global_sockfd;
 socklen_t global_addr_len;
 
-
-uint16_t recv_win = MAX_WINDOW;
-
 // Updates when receiving new packets
 uint16_t their_recv_win =  MAX_WINDOW;
 
+// Track current sequence number and expecting
 uint16_t seq_num = 0;
 uint16_t expecting_seq = 0;
 
+// Send and Receive Buffers
 std::list<packet> send_buffer;
 std::list<packet> recv_buffer;
+
+// Track duplicate ACKs
+uint16_t last_ack = 0;
+uint8_t duplicate_ack_count = 0;
 
 
 // Remove acknowledged packets from buffer
@@ -73,6 +76,11 @@ void insert_packet(std::list<packet>& buff, const packet& new_packet) {
 // Creates and Sends packet, adds to buffer and returns success
 bool send_packet(uint16_t ack, uint16_t flags,
     uint8_t* data_buffer, ssize_t data_len) {
+    // Buffer full, cannot send
+    if(data_len > their_recv_win - get_buffer_size(send_buffer)){
+        printf("Buffer full, did not send\n");
+        return false;
+    }
 
     printf("Creating Packet %d\n", seq_num);
     char buf[sizeof(packet)] = {0};
@@ -113,12 +121,6 @@ bool send_packet(uint16_t ack, uint16_t flags,
     return false;
 }
 
-bool receive_packet(){
-
-
-
-    return true;
-}
 
 // Output data from buffer and return next expected sequence number
 uint16_t read_buffer(std::list<packet>& buff,
@@ -139,6 +141,35 @@ uint16_t read_buffer(std::list<packet>& buff,
         else break;
     }
     return expecting_seq;
+}
+
+// Sends packet with smallest sequence number in sending buffer
+bool retransmit_lowest_packet(){
+    packet lowest_seq = send_buffer.front();
+
+    char buf[sizeof(packet)] = {0};
+    packet* pkt = (packet*) buf;
+
+    // Set header fields:
+    pkt->seq = lowest_seq.seq;
+    pkt->ack = lowest_seq.ack;       // Ack number
+    pkt->length = lowest_seq.length;  // Size of Payload
+    pkt->win = htons(MAX_WINDOW);     // Window size
+    pkt->flags = lowest_seq.flags;   // Flags: (hex: 0x3 = 110 - SYN=1, ACK=1, Parity=0 )
+    pkt->unused = htons(0);    // Unused field
+
+    if (ntohs(lowest_seq.length) > 0 ) {
+        memcpy(pkt->payload, lowest_seq.payload, ntohs(lowest_seq.length));
+    }
+    set_parity_bit(pkt);
+    int did_send = sendto(global_sockfd, pkt, sizeof(packet) - (MSS-ntohs(lowest_seq.length)),
+    0, (struct sockaddr*)global_addr, global_addr_len);
+
+    if(did_send>0){
+        fprintf(stderr, "Packet sent: %d\n", ntohs(lowest_seq.seq));
+        return true;
+    }
+    return false;
 }
 
 // Main function of transport layer; never quits
@@ -342,11 +373,28 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
 
             //If ACK flag is set, remove ACKed packets from sending buffer
             if(ack_flag){
+                if(ack == last_ack) duplicate_ack_count++;
+                else{
+                    last_ack = ack;
+                    duplicate_ack_count = 1;
+                }
+
 
                 resetTimer();  // Reset timer on ack
 
                 fprintf(stderr, "Recv ack for %d\n", ack);
                 ack_buffer(send_buffer, ack);
+
+                //If this is the 3rd ACK in a row, retransmit packet
+                if(duplicate_ack_count == 3){
+                    fprintf(stderr, "Got 3 dup ACK\n");
+                    fprintf(stderr, "Gonna try to retransmit %d\n",ntohs(send_buffer.front().seq));
+
+                    if(retransmit_lowest_packet()){
+                        fprintf(stderr, "Retransmitted packet %d\n", ntohs(send_buffer.front().seq));
+                        duplicate_ack_count = 0;
+                    }
+                }
 
                 // If dedicated ACK pkt, then continue
                 if(length <= 0) continue;
@@ -377,21 +425,19 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
         // Send until window is full
         nread = input_p(data_buff, MSS);
         if(nread){
-            // TODO: Set Buffer Windows
-            if(get_buffer_size(send_buffer) < their_recv_win){
+            bool did_send = send_packet(0,0, data_buff, nread);
 
-                bool did_send = send_packet(0,0, data_buff, nread);
-            }
         }
     }
 }
 
-
 uint16_t get_buffer_size(std::list<packet> buff){
     uint16_t buff_size = 0;
+    fprintf(stderr,"SEND BUFF ");
+
 
     for (auto const& i : buff) {
-        fprintf(stderr,"SEND BUF %d",ntohs(i.seq));
+        fprintf(stderr,"%d ",ntohs(i.seq));
         buff_size += ntohs(i.length);
     }
     fprintf(stderr,"\n");
