@@ -198,17 +198,18 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
         }
 
         // 3. Receive last ACK
-        bytes_recvd = recvfrom(sockfd, server_recv_pkt, sizeof(packet),
-            0, (struct sockaddr*)addr, &addr_len);
+        // bytes_recvd = recvfrom(sockfd, server_recv_pkt, sizeof(packet),
+        //     0, (struct sockaddr*)addr, &addr_len);
 
-        if(bytes_recvd > 0){
-            if(htons(server_recv_pkt->length) != 0){
+        // if(bytes_recvd > 0){
+        //     if(htons(server_recv_pkt->length) != 0){
+        //         fprintf(stderr, "Data from last client ACK\n");
 
-                expecting_seq = htons(server_recv_pkt->seq) ;
-            }
+        //         expecting_seq = htons(server_recv_pkt->seq) ;
+        //     }
 
-            fprintf(stderr, "Client seq: %d received, flags=%d\n", htons(server_recv_pkt->seq), server_recv_pkt->flags);
-        }
+        // //     fprintf(stderr, "Client seq: %d received, flags=%d\n", htons(server_recv_pkt->seq), server_recv_pkt->flags);
+        // }
     }
 
 
@@ -337,7 +338,7 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
 
             // Do a linear scan of all the packets in the receiving buffer starting with the next SEQ you expect and write their contents to standard output
             uint16_t next_seq = read_buffer(recv_buffer, output_p);
-            
+
             nread = input_p(data_buff, MSS);
             // Send back ACK packet of next expected sequence
             bool did_send = send_packet(next_seq, 0x2, data_buff, nread);
