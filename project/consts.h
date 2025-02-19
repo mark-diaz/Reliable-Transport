@@ -48,13 +48,13 @@ typedef struct {
     uint16_t win;
     uint16_t flags; // LSb 0 SYN, LSb 1 ACK, LSb 2 Parity
     uint16_t unused;
-    uint8_t payload[0];
+    uint8_t payload[MSS];
 } packet;
 
 // Bit counter
 static inline int bit_count(packet* pkt) {
     uint8_t* bytes = (uint8_t*) pkt;
-    int len = sizeof(packet) + MIN(MAX_PAYLOAD, ntohs(pkt->length));
+    int len = sizeof(packet) - MSS + ntohs(pkt->length);
     int count = 0;
 
     for (int i = 0; i < len; i++) {
