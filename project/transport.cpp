@@ -337,7 +337,8 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
 
             // Do a linear scan of all the packets in the receiving buffer starting with the next SEQ you expect and write their contents to standard output
             uint16_t next_seq = read_buffer(recv_buffer, output_p);
-
+            
+            nread = input_p(data_buff, MSS);
             // Send back ACK packet of next expected sequence
             bool did_send = send_packet(next_seq, 0x2, data_buff, nread);
             if(did_send){
