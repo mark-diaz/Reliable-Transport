@@ -8,9 +8,23 @@
 #include <sys/socket.h>
 #include <bitset>
 #include <fcntl.h>
+#include <chrono>
 
 #include "consts.h"
 #include "packet.h"
+
+// timer
+std::chrono::time_point<std::chrono::high_resolution_clock> start_time;
+
+void resetTimer() {
+    start_time = std::chrono::high_resolution_clock::now();
+}
+ 
+// Function to get the elapsed time in seconds
+double getElapsedTime() {
+    auto now = std::chrono::high_resolution_clock::now();
+    return std::chrono::duration<double>(now - start_time).count();
+}
 
 uint16_t get_buffer_size(std::list<packet> buff);
 
@@ -36,15 +50,11 @@ void ack_buffer(std::list<packet>& buff, uint16_t ack){
     std::list<packet>::iterator i = send_buffer.begin();
     while(i != send_buffer.end())
     {
-        // fprintf(stderr,"SEND BUF %d ", ntohs(i->seq));
-        fprintf(stderr,"ENTERING ACK_BUFFER %d\n", ntohs((*i).seq));
-
         if(ntohs((*i).seq) < ack) {
             fprintf(stderr,"REMOVING SEQ FROM SENDING BUF %d\n", ntohs(i->seq));
 
             i = buff.erase(i);
         }
-
         else
             i++;
     }
@@ -58,7 +68,6 @@ void insert_packet(std::list<packet>& buff, const packet& new_packet) {
     }
 
     buff.insert(it, new_packet);
-    fprintf(stderr, "RECV BUFFER ADD %d\n", ntohs(new_packet.seq));
 }
 
 // Creates and Sends packet, adds to buffer and returns success
@@ -73,7 +82,7 @@ bool send_packet(uint16_t ack, uint16_t flags,
     pkt->seq = (data_len<0 && flags == 0x2) ? htons(0) : htons(seq_num);
     pkt->ack = htons(ack);       // Ack number
     pkt->length = htons(data_len);  // Size of Payload
-    pkt->win = htons(512);     // Window size
+    pkt->win = htons(MAX_WINDOW);     // Window size
     pkt->flags = flags;   // Flags: (hex: 0x3 = 110 - SYN=1, ACK=1, Parity=0 )
     pkt->unused = htons(0);    // Unused field
 
@@ -93,7 +102,12 @@ bool send_packet(uint16_t ack, uint16_t flags,
         if (data_len != 0) {
             insert_packet(send_buffer, *pkt);
         }
-        fprintf(stderr, "Packet sent: %d\n", seq_num-1);
+        fprintf(stderr, "Packet sent: %d\n", seq_num-1); 
+        
+        if ((pkt->flags >> 1) & 1) {
+            fprintf(stderr, "SENT ACK: %d\n", ack); 
+        }
+        // fprintf(stderr, "SEND BUFFER ADD %d\n", ntohs(pkt->seq));
         return true;
     }
     return false;
@@ -112,14 +126,14 @@ uint16_t read_buffer(std::list<packet>& buff,
     std::list<packet>::iterator i = buff.begin();
     while(i != buff.end() )
     {
-        fprintf(stderr, "Expecting packet %d , seeing %d\n", expecting_seq, ntohs((*i).seq));
+        fprintf(stderr, "Expecting packet %d, currently on: %d\n", expecting_seq, ntohs((*i).seq));
 
         if(ntohs((*i).seq) == expecting_seq){
             output_p((*i).payload, ntohs((*i).length));
             fprintf(stderr, "RECV BUFF ERASE - SEQ# %d\n",ntohs((*i).seq));
             i = buff.erase(i);
             expecting_seq++;
-
+            fprintf(stderr, "Expecting got incremented %d- currently on %d\n",expecting_seq, ntohs((*i).seq));
         }
         // Packet did not match expected sequence
         else break;
@@ -135,6 +149,8 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
     global_sockfd = sockfd;
     global_addr_len = sizeof(struct sockaddr_in);
     socklen_t addr_len = sizeof(struct sockaddr_in);
+    
+    fprintf(stderr, "< HANDSHAKE - BEGIN >\n");
 
     /* Perform 3-Way Handshake */
     if(type == SERVER) {
@@ -155,11 +171,14 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
 
         // Output data if there is a payload
         if(htons(server_recv_pkt->length) > 0){
+            
             insert_packet(recv_buffer, (*server_recv_pkt));
             read_buffer(recv_buffer, output_p);
+            fprintf(stderr, "RECV BUFFER ADD %d\n", ntohs(server_recv_pkt->seq));
+
         }
 
-        fprintf(stderr, "Client seq: %d received, flags=%d\n", htons(server_recv_pkt->seq), server_recv_pkt->flags);
+        fprintf(stderr, "Server: Received client SYN - seq: %d\n", htons(server_recv_pkt->seq));
 
         // 2. Send back SYN ACK
 
@@ -183,33 +202,14 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
         memcpy(pkt->payload, data_buff, nread);
         set_parity_bit(pkt);
 
-        // make_handshake_packet(server_send_handshake_buffer, nullptr, 0, seq_num, ack, flags);
-
-        // // set parity
-        // packet* server_send_pkt = (packet*) server_send_handshake_buffer;
-
         if(bytes_recvd > 0){ // TODO: This should check for SYN ACK details
             int did_send = sendto(sockfd, pkt, sizeof(packet), 0, (struct sockaddr*)addr, addr_len);
             if(did_send) {
-                fprintf(stderr, "sent server SYN ACK Seq:%d, ACK: %d\n", seq_num, ack);
+                fprintf(stderr, "Server: Sent SYN ACK - Seq: %d\n", seq_num);
                 expecting_seq = ack;
                 seq_num ++;
             }
         }
-
-        // 3. Receive last ACK
-        // bytes_recvd = recvfrom(sockfd, server_recv_pkt, sizeof(packet),
-        //     0, (struct sockaddr*)addr, &addr_len);
-
-        // if(bytes_recvd > 0){
-        //     if(htons(server_recv_pkt->length) != 0){
-        //         fprintf(stderr, "Data from last client ACK\n");
-
-        //         expecting_seq = htons(server_recv_pkt->seq) ;
-        //     }
-
-        // //     fprintf(stderr, "Client seq: %d received, flags=%d\n", htons(server_recv_pkt->seq), server_recv_pkt->flags);
-        // }
     }
 
 
@@ -245,7 +245,7 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
             0, (struct sockaddr*)addr, addr_len);
 
         if(did_send){
-            fprintf(stderr, "sent first client SYN -- seq: %d: \n", ntohs(client_send_pkt->seq));
+            fprintf(stderr, "Client: Sent SYN -- seq: %d: \n", ntohs(client_send_pkt->seq));
             seq_num++;
         }
 
@@ -254,7 +254,7 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
 
         if (bytes_recvd > 0){
             packet* client_recv_pkt = (packet*) client_recv_handshake_buffer;
-            fprintf(stderr, "Server seq: %d received, flags=%d\n", htons(client_recv_pkt->seq), client_recv_pkt->flags);
+            fprintf(stderr, "Client: Received server SYN ACK seq: %d\n", htons(client_recv_pkt->seq));
 
             // char syn_ack_buff[] = "ACK 790, SEQ 457, ACK";
             ack = htons(client_recv_pkt->seq) + 1, flags = 0x2; // 0x1 = 010 - PARITY=0, ACK=1, SYN=0
@@ -264,6 +264,7 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
             if(htons(client_recv_pkt->length) > 0){
                 insert_packet(recv_buffer, (*client_recv_pkt));
                 read_buffer(recv_buffer, output_p);
+                fprintf(stderr, "RECV BUFFER ADD %d\n", ntohs(client_recv_pkt->seq));
             }
 
 
@@ -287,20 +288,35 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
             0, (struct sockaddr*)addr, addr_len);
 
             if(did_send) {
-                fprintf(stderr, "sent last client SYN - seq= %d\n", ntohs(client_send_pkt->seq));
+                fprintf(stderr, "Client: Sent final SYN - seq= %d\n", ntohs(client_send_pkt->seq));
             }
         }
     }
 
-    fprintf(stderr, "My next seq: %d -- I expect: %d\n", seq_num, expecting_seq);
+    fprintf(stderr, "< HANDSHAKE - END >\n");
+
+    fprintf(stderr, "My current Seq_num: %d Expecting seq_num: %d\n", seq_num, expecting_seq);
 
     //Set socket nonblocking
     int socket_flags = fcntl(sockfd, F_GETFL);
     socket_flags |= O_NONBLOCK;
     fcntl(sockfd, F_SETFL, socket_flags);
-
+    
+    resetTimer();  // Start the timer
     /* Normal State */
     while (true) {
+
+        // fprintf(stderr, "Time: %lf\n", getElapsedTime());
+        
+        // #TODO: get elapsed timeline
+        // if (getElapsedTime() >= 1.0) {
+        //     // if (send_buffer.begin() != nullptr)
+        //     auto it = send_buffer.begin();
+        //     bool did_send = send_packet(it->seq, 0x0, it->payload, it->length);
+        //     resetTimer();  // Reset timer on ack
+        //     fprintf(stderr, "TIMER RESEND!\n");
+        // }
+
         uint8_t data_buff[MSS]; uint16_t nread;
         char buf[sizeof(packet)] = {0};
         packet* pkt = (packet*) buf;
@@ -326,6 +342,9 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
 
             //If ACK flag is set, remove ACKed packets from sending buffer
             if(ack_flag){
+
+                resetTimer();  // Reset timer on ack
+
                 fprintf(stderr, "Recv ack for %d\n", ack);
                 ack_buffer(send_buffer, ack);
 
@@ -333,18 +352,25 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
                 if(length <= 0) continue;
             }
 
-            // Place the packet in receiving buffer
-            insert_packet(recv_buffer, (*pkt));
+            // Place the packet in receiving buffer - if hasn't been processed
+            if (expecting_seq <= ntohs(pkt->seq)) {
+                insert_packet(recv_buffer, (*pkt));
+                fprintf(stderr, "RECV BUFFER ADD %d\n", ntohs(pkt->seq));
+            }
 
-            // Do a linear scan of all the packets in the receiving buffer starting with the next SEQ you expect and write their contents to standard output
+
+            // Do a linear scan of all the packets in the receiving buffer starting with the 
+            // next SEQ you expect and write their contents to standard output
             uint16_t next_seq = read_buffer(recv_buffer, output_p);
-
+            
             nread = input_p(data_buff, MSS);
             // Send back ACK packet of next expected sequence
             bool did_send = send_packet(next_seq, 0x2, data_buff, nread);
             if(did_send){
                 fprintf(stderr, "Sent ACK  %d\n", next_seq);
             }
+        
+
         }
 
         // Sending Data
@@ -355,9 +381,6 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
             if(get_buffer_size(send_buffer) < their_recv_win){
 
                 bool did_send = send_packet(0,0, data_buff, nread);
-                if(did_send){
-                    fprintf(stderr, "Sent Packet: %d\n", seq_num-1);
-                }
             }
         }
     }
