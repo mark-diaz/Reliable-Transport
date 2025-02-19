@@ -123,7 +123,6 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
 
         // // set parity
         // packet* server_send_pkt = (packet*) server_send_handshake_buffer;
-        // set_parity_bit(server_send_pkt);
 
         if(bytes_recvd > 0){ // TODO: This should check for SYN ACK details
             int did_send = sendto(sockfd, pkt, sizeof(packet), 0, (struct sockaddr*)addr, addr_len);
@@ -134,18 +133,18 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
             }
         }
 
-        // // 3. Receive last ACK
-        // bytes_recvd = recvfrom(sockfd, server_recv_handshake_buffer, MSS,
-        //     0, (struct sockaddr*)addr, &addr_len);
+        // 3. Receive last ACK
+        bytes_recvd = recvfrom(sockfd, server_recv_handshake_buffer, MSS,
+            0, (struct sockaddr*)addr, &addr_len);
 
-        // if(bytes_recvd > 0){
-        //     if(htons(server_recv_pkt->length) != 0){
+        if(bytes_recvd > 0){
+            if(htons(server_recv_pkt->length) != 0){
 
-        //         expecting_seq = htons(server_recv_pkt->seq) ;
-        //     }
+                expecting_seq = htons(server_recv_pkt->seq) ;
+            }
 
-        //     fprintf(stderr, "Client seq: %d received, flags=%d\n", htons(server_recv_pkt->seq), server_recv_pkt->flags);
-        // }
+            fprintf(stderr, "Client seq: %d received, flags=%d\n", htons(server_recv_pkt->seq), server_recv_pkt->flags);
+        }
     }
 
 
@@ -193,7 +192,7 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
             fprintf(stderr, "Server seq: %d received, flags=%d\n", htons(client_recv_pkt->seq), client_recv_pkt->flags);
 
             // char syn_ack_buff[] = "ACK 790, SEQ 457, ACK";
-            ack = htons(client_recv_pkt->seq) + 1, flags = 0x1; // 0x1 = 001 - PARITY=0, SYN=0, ACK=1
+            ack = htons(client_recv_pkt->seq) + 1, flags = 0x2; // 0x1 = 010 - PARITY=0, ACK=1, SYN=0
             expecting_seq = htons(client_recv_pkt->seq);
 
             //Check if there is payload
@@ -220,8 +219,10 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
             packet* client_send_pkt = (packet*) client_send_handshake_buffer;
             set_parity_bit(client_send_pkt);
 
-            sendto(sockfd, client_send_handshake_buffer, sizeof(client_send_handshake_buffer),
+            sendto(sockfd, client_send_handshake_buffer, sizeof(packet) - (MSS-ntohs(client_send_pkt->length)),
             0, (struct sockaddr*)addr, addr_len);
+            
+            fprintf(stderr, "Ack flags: %d -- Ack#: %d\n", client_send_pkt->flags, ntohs(client_send_pkt->ack));
 
             if(did_send) {
                 fprintf(stderr, "sent last client SYN\n");
@@ -251,8 +252,9 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
             uint16_t ack = ntohs(pkt->ack);
             uint16_t seq = ntohs(pkt->seq);
             uint16_t length = ntohs(pkt->length);
-            bool ack_flag = (pkt->flags);
-            fprintf(stderr, "Received packet %d\n", seq);
+            bool ack_flag = (pkt->flags >> 1) & 1;
+
+            fprintf(stderr, "Received packet %d - Length:%d\n", seq, length);
 
             // Integrity Check
             if(!verify_parity(pkt)){
@@ -273,12 +275,13 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
             insert_packet(recv_buffer, (*pkt));
 
             // Do a linear scan of all the packets in the receiving buffer starting with the next SEQ you expect and write their contents to standard output
+            // TODO: this is where next_seq is set
             uint16_t next_seq = read_buffer(recv_buffer, output_p);
 
             // Creating ACK packet
             // ?: Should it ACK just received packet or just outputed?
             packet* ack_pkt = (packet*) buf;
-            ack_pkt->flags = 1;
+            ack_pkt->flags = 2; // 0 1 0 - parity, ack, syn
             ack_pkt->ack = htons(next_seq);
             uint16_t input_read = input_p(data_buff, MSS);
             ack_pkt->length = htons(0);
@@ -324,7 +327,7 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
                 if(did_send>0){
                     // Add packet to sending buffer
                     insert_packet(send_buffer, *pkt);
-                    fprintf(stderr, "I sent %d\n", seq_num);
+                    fprintf(stderr, "Packet sent: %d\n", seq_num);
                     seq_num++;
                 }
             }
@@ -337,9 +340,10 @@ uint16_t get_buffer_size(std::list<packet> buff){
     uint16_t buff_size = 0;
 
     for (auto const& i : buff) {
-        fprintf(stderr,"Packet %d \n",ntohs(i.seq));
+        fprintf(stderr,"SEND BUF %d ",ntohs(i.seq));
         buff_size += ntohs(i.length);
     }
+    fprintf(stderr,"\n");
 
     return buff_size;
 }
