@@ -115,7 +115,6 @@ bool send_packet(uint16_t ack, uint16_t flags,
         if ((pkt->flags >> 1) & 1) {
             fprintf(stderr, "SENT ACK: %d\n", ack); 
         }
-        // fprintf(stderr, "SEND BUFFER ADD %d\n", ntohs(pkt->seq));
         return true;
     }
     return false;
@@ -145,6 +144,9 @@ uint16_t read_buffer(std::list<packet>& buff,
 
 // Sends packet with smallest sequence number in sending buffer
 bool retransmit_lowest_packet(){
+    if (send_buffer.empty()) 
+        return false;
+    
     packet lowest_seq = send_buffer.front();
 
     char buf[sizeof(packet)] = {0};
@@ -160,13 +162,19 @@ bool retransmit_lowest_packet(){
 
     if (ntohs(lowest_seq.length) > 0 ) {
         memcpy(pkt->payload, lowest_seq.payload, ntohs(lowest_seq.length));
+        fprintf(stderr, "Payload: Filled\n");
+
     }
-    set_parity_bit(pkt);
-    int did_send = sendto(global_sockfd, pkt, sizeof(packet) - (MSS-ntohs(lowest_seq.length)),
+    // set_parity_bit(pkt);
+    fprintf(stderr, "Correct Parity?: %d\n", verify_parity(pkt));
+
+    int did_send = sendto(global_sockfd, pkt, sizeof(packet) - (MSS-ntohs(pkt->length)),
     0, (struct sockaddr*)global_addr, global_addr_len);
 
     if(did_send>0){
-        fprintf(stderr, "Packet sent: %d\n", ntohs(lowest_seq.seq));
+
+        fprintf(stderr, "Packet sent: %d - length: %d\n", ntohs(pkt->seq), ntohs(pkt->length));
+
         return true;
     }
     return false;
@@ -337,16 +345,17 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
     /* Normal State */
     while (true) {
 
-        // fprintf(stderr, "Time: %lf\n", getElapsedTime());
+        fprintf(stderr, "Time: %lf\n", getElapsedTime());
         
         // #TODO: get elapsed timeline
-        // if (getElapsedTime() >= 1.0) {
-        //     // if (send_buffer.begin() != nullptr)
-        //     auto it = send_buffer.begin();
-        //     bool did_send = send_packet(it->seq, 0x0, it->payload, it->length);
-        //     resetTimer();  // Reset timer on ack
-        //     fprintf(stderr, "TIMER RESEND!\n");
-        // }
+        if (getElapsedTime() >= 1.0) {
+            // if (send_buffer.begin() != nullptr)
+            if(retransmit_lowest_packet()){
+                fprintf(stderr, "Retransmitted packet %d\n", ntohs(send_buffer.front().seq));
+            }            
+            resetTimer();
+            fprintf(stderr, "TIMER RESEND!\n");
+        }
 
         uint8_t data_buff[MSS]; uint16_t nread;
         char buf[sizeof(packet)] = {0};
@@ -373,7 +382,8 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
 
             //If ACK flag is set, remove ACKed packets from sending buffer
             if(ack_flag){
-                if(ack == last_ack) duplicate_ack_count++;
+                if(ack == last_ack) 
+                    duplicate_ack_count++;
                 else{
                     last_ack = ack;
                     duplicate_ack_count = 1;
@@ -388,7 +398,6 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
                 //If this is the 3rd ACK in a row, retransmit packet
                 if(duplicate_ack_count == 3){
                     fprintf(stderr, "Got 3 dup ACK\n");
-                    fprintf(stderr, "Gonna try to retransmit %d\n",ntohs(send_buffer.front().seq));
 
                     if(retransmit_lowest_packet()){
                         fprintf(stderr, "Retransmitted packet %d\n", ntohs(send_buffer.front().seq));
