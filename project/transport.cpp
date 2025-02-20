@@ -16,24 +16,26 @@
 // timer
 std::chrono::time_point<std::chrono::high_resolution_clock> start_time;
 
+bool duplicate_ack_set = false;
+
 void resetTimer() {
     start_time = std::chrono::high_resolution_clock::now();
 }
- 
+
 // Function to get the elapsed time in seconds
 double getElapsedTime() {
     auto now = std::chrono::high_resolution_clock::now();
     return std::chrono::duration<double>(now - start_time).count();
 }
 
-uint16_t get_buffer_size(std::list<packet> buff);
+uint32_t get_buffer_size(std::list<packet> buff);
 
 struct sockaddr_in* global_addr;
 int global_sockfd;
 socklen_t global_addr_len;
 
 // Updates when receiving new packets
-uint16_t their_recv_win =  MAX_WINDOW;
+uint32_t their_recv_win =  MAX_WINDOW;
 
 // Track current sequence number and expecting
 uint16_t seq_num = 0;
@@ -76,18 +78,14 @@ void insert_packet(std::list<packet>& buff, const packet& new_packet) {
 // Creates and Sends packet, adds to buffer and returns success
 bool send_packet(uint16_t ack, uint16_t flags,
     uint8_t* data_buffer, ssize_t data_len) {
-    // Buffer full, cannot send
-    if(data_len > their_recv_win - get_buffer_size(send_buffer)){
-        printf("Buffer full, did not send\n");
-        return false;
-    }
 
-    printf("Creating Packet %d\n", seq_num);
+
+    fprintf(stderr, "Creating Packet %d\n", seq_num);
     char buf[sizeof(packet)] = {0};
     packet* pkt = (packet*) buf;
 
     // Set header fields:
-    pkt->seq = (data_len<0 && flags == 0x2) ? htons(0) : htons(seq_num);
+    pkt->seq = (data_len < 0 && flags == 0x2) ? htons(0) : htons(seq_num);
     pkt->ack = htons(ack);       // Ack number
     pkt->length = htons(data_len);  // Size of Payload
     pkt->win = htons(MAX_WINDOW);     // Window size
@@ -148,7 +146,7 @@ bool retransmit_lowest_packet(){
         return false;
     
     packet lowest_seq = send_buffer.front();
-
+    
     char buf[sizeof(packet)] = {0};
     packet* pkt = (packet*) buf;
 
@@ -347,9 +345,8 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
 
         fprintf(stderr, "Time: %lf\n", getElapsedTime());
         
-        // #TODO: get elapsed timeline
-        if (getElapsedTime() >= 1.0) {
-            // if (send_buffer.begin() != nullptr)
+        if (getElapsedTime() >= 1.0 && their_recv_win - get_buffer_size(send_buffer) > MSS) {
+
             if(retransmit_lowest_packet()){
                 fprintf(stderr, "Retransmitted packet %d\n", ntohs(send_buffer.front().seq));
             }            
@@ -365,14 +362,14 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
         int bytes_recvd = recvfrom(sockfd, pkt, sizeof(packet),
                           0, (struct sockaddr*)addr, &addr_len);
 
-        // TODO: Set Receive Buffer Window
         if(bytes_recvd > 0){
             uint16_t ack = ntohs(pkt->ack);
             uint16_t seq = ntohs(pkt->seq);
             uint16_t length = ntohs(pkt->length);
+            their_recv_win = ntohs(pkt->win);
             bool ack_flag = (pkt->flags >> 1) & 1;
 
-            fprintf(stderr, "Received packet %d - Length:%d\n", seq, length);
+            fprintf(stderr, "Received packet %d - Length:%d Window size:%d\n", seq, length, their_recv_win);
 
             // Integrity Check
             if(!verify_parity(pkt)){
@@ -389,20 +386,24 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
                     duplicate_ack_count = 1;
                 }
 
-
                 resetTimer();  // Reset timer on ack
 
                 fprintf(stderr, "Recv ack for %d\n", ack);
                 ack_buffer(send_buffer, ack);
 
                 //If this is the 3rd ACK in a row, retransmit packet
-                if(duplicate_ack_count == 3){
+                if(duplicate_ack_count == 3 || duplicate_ack_set == true){
                     fprintf(stderr, "Got 3 dup ACK\n");
+                    duplicate_ack_set = true;
 
-                    if(retransmit_lowest_packet()){
-                        fprintf(stderr, "Retransmitted packet %d\n", ntohs(send_buffer.front().seq));
-                        duplicate_ack_count = 0;
+                    // if can send!
+                    if (their_recv_win - get_buffer_size(send_buffer) > MSS) {
+                        if(retransmit_lowest_packet()){
+                            fprintf(stderr, "Retransmitted packet %d\n", ntohs(send_buffer.front().seq));
+                            duplicate_ack_set = false;
+                        } 
                     }
+                    duplicate_ack_count = 0;
                 }
 
                 // If dedicated ACK pkt, then continue
@@ -420,7 +421,20 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
             // next SEQ you expect and write their contents to standard output
             uint16_t next_seq = read_buffer(recv_buffer, output_p);
             
-            nread = input_p(data_buff, MSS);
+            uint32_t read_len = 0;
+            
+            if (their_recv_win - get_buffer_size(send_buffer) > MSS) {
+                read_len = MSS;
+            }
+            else if (their_recv_win - get_buffer_size(send_buffer) > 0){
+                read_len = their_recv_win - get_buffer_size(send_buffer);
+            }
+            else {
+                read_len = 0;
+                fprintf(stderr, "Buffer currently full\n");
+            }
+
+            nread = input_p(data_buff, read_len);
             // Send back ACK packet of next expected sequence
             bool did_send = send_packet(next_seq, 0x2, data_buff, nread);
             if(did_send){
@@ -432,7 +446,20 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
 
         // Sending Data
         // Send until window is full
-        nread = input_p(data_buff, MSS);
+        uint32_t read_len = 0;
+
+        if (their_recv_win - get_buffer_size(send_buffer) > MSS) {
+            read_len = MSS;
+        }
+        else if (their_recv_win - get_buffer_size(send_buffer) > 0){
+            read_len = their_recv_win - get_buffer_size(send_buffer);
+        }
+        else {
+            read_len = 0;
+            fprintf(stderr, "Buffer currently full\n");
+        }
+
+        nread = input_p(data_buff, read_len);
         if(nread){
             bool did_send = send_packet(0,0, data_buff, nread);
 
@@ -440,7 +467,7 @@ void listen_loop(int sockfd, struct sockaddr_in* addr, int type,
     }
 }
 
-uint16_t get_buffer_size(std::list<packet> buff){
+uint32_t get_buffer_size(std::list<packet> buff){
     uint16_t buff_size = 0;
     fprintf(stderr,"SEND BUFF ");
 
